@@ -4,9 +4,10 @@ Working name: **markets**. A prediction-style system on top of the
 [`fakeable`](../fakeable/) wrapped-token base, where fake-token participation is
 free (credits) and real-token participation is staked value.
 
-**Status:** DRAFT v1 — for owner review. No implementation until approved. This repo
-is independent (separately pushable to GitHub/Radicle; the eth superproject ignores
-it). Depends on the `fakeable` repo (abstract base + beacon/factory).
+**Status:** DRAFT v2 — owner review round 1 incorporated (§9 OQ-6: appeal layer
+added). No implementation until approved. This repo is independent (separately
+pushable to GitHub/Radicle; the eth superproject ignores it). Depends on the
+`fakeable` repo (abstract base + beacon/factory).
 
 ---
 
@@ -83,18 +84,49 @@ Let, at finalize with winner `w`:
   3. **Close & tally**: after `W` blocks, anyone closes. The plurality stake-weight
      wins. **Quorum**: if total voted stake < `q%` of the stake token supply, the
      round auto-defers (no slashing).
-  4. **Finalize**:
-     - Outcome `w` wins → `E.resolve(w)` (push: resolver calls the event; the event
-       trusts only its `resolver`). Slashing: losing voters lose `s%` of escrowed
-       stake (burned from the wrapper — real burn, backing released to the
-       resolver's reward pool); winning voters split the slashed pool pro-rata to
-       their escrowed stake (reward = their stake × slashedPool / winningStake,
-       paid in stake tokens). DEFER voters are unslashed and unrewarded.
-     - DEFER wins (or quorum fails) → `E.resolutionBlock` advances by `D` blocks
-       (defer period), all escrow returns unslashed, window `W` doubles (cap `Wmax`)
-       to raise the cost of serial griefing.
+  4. **Conclude**: tally; plurality wins.
+     - Outcome `w` wins → the outcome is **provisional**; slashing settles NOW for
+       this round: losing voters lose `s%` of escrowed stake (burned from the
+       wrapper — real burn, backing released to the resolver's reward pool);
+       winning voters split the slashed pool pro-rata to their escrowed stake
+       (reward = stake × slashedPool / winningStake, in stake tokens). DEFER voters
+       unslashed, unrewarded. The event is NOT yet resolved — the **challenge
+       window** `C` blocks opens (§2.3a appeal layer).
+     - DEFER wins (or quorum fails) → `E.resolutionBlock` advances by `D` blocks,
+       all escrow returns unslashed, window `W` doubles (cap `Wmax`).
 - Slashing math is integer-floored per position; dust (rounding remainders) stays in
   the reward pool and rolls into future rewards — never minted, never lost.
+
+### 2.3a Appeal layer (owner decision, OQ-6)
+
+A concluded outcome round is provisional until it survives its challenge window:
+
+- **Appeal**: during the `C`-block challenge window after a round concludes with
+  provisional outcome `w`, anyone posts an **appeal bond** `B` (stake tokens,
+  burned on failure) naming a different outcome `w' ≠ w` (or DEFER). This opens the
+  next round at **escalation level L+1**: window `W·2^L` and quorum `q·2^L` (both
+  capped at `Wmax`/`qmax`), so each appeal makes overturning harder and costlier.
+- **Appeal round** votes normally (any outcome or DEFER; the provisional winner can
+  be re-elected). It concludes like any round — slashing/rewards settle per-round
+  and are never clawed back retroactively (participation incentives at each level
+  stand on their own; the appellant bond is the deterrent against frivolous
+  escalation).
+- **Outcomes**:
+  - Appeal round **overturns** (winner ≠ w) → appellant bond returned + appellant
+    receives a fixed share `a%` of that round's slashed pool (the rest to winners as
+    usual); the new outcome is provisional with a fresh challenge window at L+1.
+  - Appeal round **upholds** w → bond burned into the reward pool; w remains
+    provisional at level L+1 (one more challenge window, harder escalation).
+  - DEFER wins → standard defer path (bond returned; defers are not "failures").
+- **Finality**: an outcome becomes final when its challenge window closes with no
+  appeal, or it is (re-)elected at level `Lmax` (no appeals beyond `Lmax`). Only
+  then does the resolver push `E.resolve(w)` (resolver-only, callable once; the
+  event trusts only its `resolver`).
+- **Liveness bound**: worst case to finality for one event ≈ `resolutionBlock +
+  Σ_{L=0..Lmax} (W·2^L + C)` — bounded, and each step costs the griefer a bond.
+- Proposed defaults (OQ-7 params extended): `B` = 1% of stake-token supply floor
+  (min. absolute floor for tiny pools), `C` = ~½ day in blocks, `Lmax` = 3,
+  `a%` = 10% of the appeal round's slashed pool.
 
 ### 2.4 Credits
 
@@ -145,6 +177,7 @@ function state() external view returns (Status, uint8 winner, uint256 resolution
 // Resolver (ERC1967, per underlying; stake token = real-only FakeableERC20)
 function wrap/unwrap(uint256) /* inherited; unwrap blocked while escrowed */;
 function openRound(address event_) external;
+function appeal(bytes32 roundId, uint8 differentOutcome) external; // bond escrowed; opens level L+1
 function vote(bytes32 roundId, uint8 outcomeOrDefer, uint256 stake) external;  // escrows
 function closeRound(bytes32 roundId) external;
 function finalize(bytes32 roundId) external;     // tally, slash, reward, push resolve/defer
@@ -195,9 +228,10 @@ chain/factory/registry addresses). Two hard requirements from the spec:
   invariant suite from fakeable is extended with event-level fuzzing (§8 M-6).
 - **Redemption conservation**: `Σ realPayouts ≤ P` always (rate math §2.2); losing
   stakes fund the rate — no external solvency assumption.
-- **Resolver capture**: quorum + defer escalation bound griefing; a >50% stake
-  attacker CAN force outcomes — that is the honest trust assumption of stake voting
-  (documented, OQ-6 on mitigation via escalating defer quorums).
+- **Resolver capture**: quorum + defer escalation + the appeal layer bound
+  griefing: a >50% attacker must re-win through escalating windows/quorums and eat
+  appeal economics at every level, and finality is bounded (§2.3a). Honest
+  minorities are compensated by per-round slashing that is never clawed back.
 - **Vote sniping**: deposits close at `resolutionBlock`; voting starts no earlier.
 - **Credit inflation is harmless by construction**: credits only ever buy fake
   tokens; fake never redeems underlying; recredit rates mirror the redemption rate
@@ -220,7 +254,7 @@ chain/factory/registry addresses). Two hard requirements from the spec:
 |----|-----------|-----------|
 | M-1 | fakeable v1.1: `burnReal(From)` + tests | forge suite + invariant green |
 | M-2 | OutcomeToken + Event + EventFactory: create, deposit (delta-measured), close at resolutionBlock | unit tests |
-| M-3 | Resolver: wrap/unwrap, rounds, escrow, plurality + quorum, slash/reward, defer escalation | unit tests incl. defer chains |
+| M-3 | Resolver: wrap/unwrap, rounds, escrow, plurality + quorum, slash/reward, defer escalation, appeal layer (levels, bonds, finality bound) | unit tests incl. defer chains + appeal overturn/uphold |
 | M-4 | CreditsRegistry: grants, conversions, recredit, registry↔factory cross-check | unit tests |
 | M-5 | Redemption: winner math (real→underlying, fake→credits), loser no-op, zero-winner unwind | unit tests incl. dust |
 | M-6 | Invariant fuzzing: conservation (Σ payouts ≤ pool; credits conservation), upgrade regression across all four proxy topologies | 128k-call invariants green |
@@ -237,11 +271,13 @@ chain/factory/registry addresses). Two hard requirements from the spec:
    (the spec says "users gain credits for interacting")? Proposal: fixed welcome
    grant + owner grants only, keep everything else out of v1.
 5. EventFactory proxied or immutable? Proposed: ERC1967 for uniformity.
-6. Resolver trust floor: document ">50% stake wins" as the model, or add a
-   challenge/appeal layer (UMA-style escalation)? v1: document.
+6. ~~Appeal layer~~ — decided: added (§2.3a). Per-round settlements never claw back;
+   appeals escalate window/quorum and cost a burned-on-failure bond; finality is
+   bounded by `Lmax`.
 7. Slash rate `s%`, quorum `q%`, window `W`, defer period `D`, `Wmax` — governance
    parameters at init; proposed defaults: s=10%, q=5%, W=~1 day in blocks,
-   D=~1 day, Wmax=~1 week.
+   D=~1 day, Wmax=~1 week; appeal: B=1% of stake supply (floored), C=~½ day,
+   Lmax=3, a=10%.
 8. Zero-winner unwind vs. treasury sweep — proposed: unwind (refund per outcome).
 9. Metadata (event title/rules) — `metadataURI` string at creation only, or on-chain
    text? Proposed: URI + optional content hash.

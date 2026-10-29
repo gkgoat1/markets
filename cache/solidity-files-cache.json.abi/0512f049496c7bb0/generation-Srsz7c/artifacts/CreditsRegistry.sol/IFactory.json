@@ -1,0 +1,1 @@
+{"abi":[{"type":"function","name":"isEvent","inputs":[{"name":"e","type":"address","internalType":"address"}],"outputs":[{"name":"","type":"bool","internalType":"bool"}],"stateMutability":"view"}],"id":41}

@@ -118,6 +118,11 @@ contract Event is Initializable, ReentrancyGuard {
         return _ev().metadataURI;
     }
 
+    function rates() external view returns (uint256 rateNum, uint256 rateDen) {
+        EventStorage storage s = _ev();
+        return (s.rateNum, s.rateDen);
+    }
+
     function state() external view returns (Status, uint8 winner, uint256 resolutionBlk) {
         EventStorage storage s = _ev();
         return (s.status, s.winner, s.resolutionBlock);

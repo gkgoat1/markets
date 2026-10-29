@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {Resolver} from "../src/Resolver.sol";
+import {Resolver, ResolverStake} from "../src/Resolver.sol";
 import {Event} from "../src/Event.sol";
 import {EventFactory} from "../src/EventFactory.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
@@ -25,7 +25,7 @@ contract MarketsInvariantTest is Test {
     }
 
     function invariant_stake_backing() public view {
-        assertEq(h.underlying().balanceOf(address(h.resolver())), h.resolver().realSupply());
+        assertEq(h.underlying().balanceOf(address(h.stake())), h.stake().realSupply());
     }
 
     function invariant_event_accounting() public view {
@@ -50,6 +50,7 @@ contract Handler is Test {
 
     MockERC20 public underlying;
     Resolver public resolver;
+    ResolverStake public stake;
     CreditsRegistry public credits;
     Event public evt;
     OutcomeToken public t0;
@@ -75,11 +76,19 @@ contract Handler is Test {
             slashBps: 1000, quorumBps: 100, window: 5, deferPeriod: 10, windowMax: 40,
             challengeWindow: 3, levelMax: 2, appellantShareBps: 1000, appealBond: 50
         });
+        stake = ResolverStake(
+            address(
+                new ERC1967Proxy(
+                    address(new ResolverStake()),
+                    abi.encodeCall(ResolverStake.initialize, (IERC20(address(underlying)), "S", "S"))
+                )
+            )
+        );
         resolver = Resolver(
             address(
                 new ERC1967Proxy(
                     address(new Resolver()),
-                    abi.encodeCall(Resolver.initialize, (IERC20(address(underlying)), address(this), "S", "S", p))
+                    abi.encodeCall(Resolver.initialize, (stake, address(this), p))
                 )
             )
         );
@@ -104,7 +113,8 @@ contract Handler is Test {
             underlying.mint(a, 100_000);
             vm.startPrank(a);
             underlying.approve(address(evt), type(uint256).max);
-            underlying.approve(address(resolver), type(uint256).max);
+            underlying.approve(address(stake), type(uint256).max);
+            stake.approve(address(resolver), type(uint256).max);
             t0.approve(address(credits), type(uint256).max);
             t1.approve(address(credits), type(uint256).max);
             vm.stopPrank();
@@ -165,7 +175,7 @@ contract Handler is Test {
         amount = bound(amount, 0, underlying.balanceOf(a));
         if (amount == 0) return;
         vm.prank(a);
-        resolver.wrap(amount);
+        stake.wrap(amount);
     }
 
     function vote(uint256 seed, uint8 choice, uint256 amount) external {
@@ -175,7 +185,7 @@ contract Handler is Test {
             if (block.number >= r.startBlock + r.window) return;
             address a = _actor(seed);
             // existing escrow stays; vote only extra stake the actor holds
-            amount = bound(amount, 0, resolver.realOf(a));
+            amount = bound(amount, 0, stake.realOf(a));
             if (amount == 0) return;
             uint8 c = choice % 3 == 2 ? DEFER : choice % 2;
             vm.prank(a);
@@ -216,7 +226,7 @@ contract Handler is Test {
         if (r.status != Resolver.RoundStatus.Concluded) return;
         if (block.number >= r.challengeEnd || r.level >= 2) return;
         address a = _actor(seed);
-        if (resolver.realOf(a) < 50) return;
+        if (stake.realOf(a) < 50) return;
         uint8 c = choice % 3 == 2 ? DEFER : choice % 2;
         if (c == r.winner) c = c == 0 ? 1 : 0;
         vm.prank(a);

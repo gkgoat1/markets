@@ -1,0 +1,17 @@
+{
+  "name": "@markets/site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test:e2e": "node e2e/integration.mjs"
+  },
+  "dependencies": {
+    "ethers": "6.16.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "8.3.4"
+  }
+}

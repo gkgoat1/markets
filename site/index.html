@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Markets — event outcomes</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+    .card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    input, select { padding: .4rem; min-width: 16rem; }
+    button { padding: .4rem .8rem; }
+    .muted { opacity: .65; font-size: .85rem; }
+    .credits { color: #b58900; font-weight: 600; }
+    .real { color: #268bd2; font-weight: 600; }
+    .err { color: #dc322f; }
+    .ok { color: #859900; }
+    code { word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Event markets</h1>
+  <p class="muted">Credits mode is the default — no real tokens needed. Paste an event address or explore on-chain.</p>
+  <div id="app">loading…</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

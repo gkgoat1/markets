@@ -3,7 +3,7 @@ pragma solidity ^0.8.13;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {Resolver} from "../src/Resolver.sol";
+import {Resolver, ResolverStake} from "../src/Resolver.sol";
 import {Event} from "../src/Event.sol";
 import {EventFactory} from "../src/EventFactory.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
@@ -20,6 +20,7 @@ contract ResolverTest is Test {
     MockERC20 underlying;
     MockCredits credits;
     Resolver resolver;
+    ResolverStake stake;
     EventFactory factory;
     Event evt;
     OutcomeToken t0;
@@ -50,11 +51,19 @@ contract ResolverTest is Test {
         factory = new EventFactory();
         factory.initialize(address(this), eventBeacon, outcomeBeacon);
 
+        stake = ResolverStake(
+            address(
+                new ERC1967Proxy(
+                    address(new ResolverStake()),
+                    abi.encodeCall(ResolverStake.initialize, (IERC20(address(underlying)), "Stake", "STK"))
+                )
+            )
+        );
         resolver = Resolver(
             address(
                 new ERC1967Proxy(
                     address(new Resolver()),
-                    abi.encodeCall(Resolver.initialize, (IERC20(address(underlying)), address(this), "Stake", "STK", P))
+                    abi.encodeCall(Resolver.initialize, (stake, address(this), P))
                 )
             )
         );
@@ -73,9 +82,11 @@ contract ResolverTest is Test {
             vm.prank(u);
             underlying.approve(address(resolver), type(uint256).max);
             vm.prank(u);
-            resolver.wrap(10_000);
+            underlying.approve(address(stake), type(uint256).max);
             vm.prank(u);
-            resolver.approve(address(resolver), type(uint256).max); // for vote escrow
+            stake.wrap(10_000);
+            vm.prank(u);
+            stake.approve(address(resolver), type(uint256).max); // for vote escrow
         }
     }
 
@@ -98,7 +109,7 @@ contract ResolverTest is Test {
 
     function test_fake_minting_disabled() public {
         vm.expectRevert();
-        resolver.mintFake(alice, 1);
+        stake.mintFake(alice, 1);
     }
 
     function test_open_requires_maturity() public {
@@ -128,15 +139,15 @@ contract ResolverTest is Test {
         // bob: 3000 - 300 = 2700 back
         vm.prank(bob);
         resolver.claim(rid);
-        assertEq(resolver.balanceOf(bob), 7000 + 2700);
+        assertEq(stake.balanceOf(bob), 7000 + 2700);
         // carol (defer): whole 2000 back
         vm.prank(carol);
         resolver.claim(rid);
-        assertEq(resolver.balanceOf(carol), 10_000);
+        assertEq(stake.balanceOf(carol), 10_000);
         // alice: 5000 + share 300 = 5300
         vm.prank(alice);
         resolver.claim(rid);
-        assertEq(resolver.balanceOf(alice), 5000 + 5300);
+        assertEq(stake.balanceOf(alice), 5000 + 5300);
     }
 
     function test_finalize_pushes_resolve_to_event() public {
@@ -164,7 +175,7 @@ contract ResolverTest is Test {
         // escrow returns whole
         vm.prank(alice);
         resolver.claim(rid);
-        assertEq(resolver.balanceOf(alice), 10_000);
+        assertEq(stake.balanceOf(alice), 10_000);
     }
 
     function test_quorum_failure_auto_defers() public {
@@ -230,17 +241,17 @@ contract ResolverTest is Test {
         assertEq(r2.slashReserved, 50);
         // carol claims bond + reserve + escrow + winner share:
         // share = 4000 * (500-50)/7000 = 257 (floor)
-        uint256 before = resolver.balanceOf(carol);
+        uint256 before = stake.balanceOf(carol);
         vm.prank(carol);
         resolver.claim(rid2);
-        assertEq(resolver.balanceOf(carol) - before, 4000 + 100 + 50 + 257);
+        assertEq(stake.balanceOf(carol) - before, 4000 + 100 + 50 + 257);
         // alice (loser of the appeal round) claims 5000-500 = 4500; she also still
         // has her round-0 winnings to claim (5000 + 300 reward).
         vm.prank(alice);
         resolver.claim(rid);
         vm.prank(alice);
         resolver.claim(rid2);
-        assertEq(resolver.balanceOf(alice), 5300 + 4500);
+        assertEq(stake.balanceOf(alice), 5300 + 4500);
         // finality: level 1 < Lmax 2, needs challenge window
         vm.roll(RB + 11 + 21 + 6);
         resolver.finalizeRound(rid2);
@@ -275,7 +286,7 @@ contract ResolverTest is Test {
         resolver.claim(rid2);
         // float = round0 slash 300 (alice's reward 300 leaves it 0) + round1 slash
         // 300 paid to alice as reward + bond 100 burned = 400
-        assertEq(resolver.balanceOf(address(resolver)), 100, "slashes paid out as rewards; bond floats");
+        assertEq(stake.balanceOf(address(resolver)), 100, "slashes paid out as rewards; bond floats");
     }
 
     function test_lmax_bounds_finality() public {

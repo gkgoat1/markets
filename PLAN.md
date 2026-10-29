@@ -4,10 +4,21 @@ Working name: **markets**. A prediction-style system on top of the
 [`fakeable`](../fakeable/) wrapped-token base, where fake-token participation is
 free (credits) and real-token participation is staked value.
 
-**Status:** DRAFT v2 — owner review round 1 incorporated (§9 OQ-6: appeal layer
-added). No implementation until approved. This repo is independent (separately
-pushable to GitHub/Radicle; the eth superproject ignores it). Depends on the
-`fakeable` repo (abstract base + beacon/factory).
+**Status:** IMPLEMENTED (M-1…M-8 complete; 27 forge tests + 3 system invariants +
+site e2e green). This repo is independent (separately pushable to GitHub/Radicle;
+the eth superproject ignores it). Depends on the `fakeable` repo (v1.1, submodule).
+
+As-built deviations from the plan text:
+
+- The stake wrapper and the round engine are SEPARATE contracts (`ResolverStake` +
+  `Resolver`) for EIP-170 headroom; escrow moves via allowance (`approve` once).
+- `Event.redeem(k)` redeems the caller's FULL position (real + fake) of outcome k —
+  no partial redeem in v1.
+- Outcome choices are bounds-checked against the event's `outcomeCount()`.
+- Appeal bonds escrow onto the NEW round (not the prior); the appellant claims from
+  it; an upheld bond stays as unclaimable float.
+- The dApp e2e is a node integration script against anvil (full user flow), not a
+  browser Playwright run; the site is vanilla TS + ethers, config-driven.
 
 ---
 

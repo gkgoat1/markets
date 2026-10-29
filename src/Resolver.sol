@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+import {Initializable} from "openzeppelin-contracts-upgradeable/contracts/proxy/utils/Initializable.sol";
 import {FakeableERC20} from "fakeable/FakeableERC20.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {MarketsSlots} from "./MarketsSlots.sol";
+
+/// ResolverStake — the real-only stake wrapper (fake minting disabled). Kept
+/// separate from the Resolver engine for EIP-170 headroom.
+contract ResolverStake is FakeableERC20 {
+    function initialize(IERC20 underlying_, string memory name_, string memory symbol_) external initializer {
+        __FakeableERC20_init(name_, symbol_, underlying_);
+    }
+
+    function _authorizeFakeMint(address) internal pure override returns (bool) {
+        return false;
+    }
+}
 
 interface IEvent {
     function state() external view returns (uint8 status, uint8 winner, uint256 resolutionBlock);
@@ -23,7 +36,7 @@ interface IEvent {
 /// the winners' pro-rata shares of the remainder. Claims never exceed escrowed +
 /// slashed stake. A burned appeal bond simply stays in the contract (unclaimable
 /// float).
-contract Resolver is FakeableERC20 {
+contract Resolver is Initializable {
     uint8 internal constant DEFER = type(uint8).max;
 
     enum RoundStatus {
@@ -53,6 +66,7 @@ contract Resolver is FakeableERC20 {
 
     struct ResolverStorage {
         address owner;
+        FakeableERC20 stakeToken;
         uint16 slashBps; // s
         uint16 quorumBps; // q (of stake supply)
         uint64 window; // W
@@ -103,13 +117,10 @@ contract Resolver is FakeableERC20 {
         uint256 appealBond;
     }
 
-    function initialize(IERC20 underlying_, address owner_, string memory name_, string memory symbol_, Params memory p)
-        external
-        initializer
-    {
-        __FakeableERC20_init(name_, symbol_, underlying_);
+    function initialize(FakeableERC20 stakeToken_, address owner_, Params memory p) external initializer {
         ResolverStorage storage s = _rs();
         s.owner = owner_;
+        s.stakeToken = stakeToken_;
         s.slashBps = p.slashBps;
         s.quorumBps = p.quorumBps;
         s.window = p.window;
@@ -121,9 +132,8 @@ contract Resolver is FakeableERC20 {
         s.appealBond = p.appealBond;
     }
 
-    /// Real-only: fake minting is disabled (the fakeable fake surface is inert).
-    function _authorizeFakeMint(address) internal pure override returns (bool) {
-        return false;
+    function stakeToken() external view returns (FakeableERC20) {
+        return _rs().stakeToken;
     }
 
     function roundIdOf(address event_, uint8 level) public pure returns (bytes32) {
@@ -185,9 +195,10 @@ contract Resolver is FakeableERC20 {
     }
 
     function _quorumFor(ResolverStorage storage s, uint8 level) internal view returns (uint256) {
+        uint256 supply = s.stakeToken.realSupply();
         uint256 bps = uint256(s.quorumBps) << level; // q·2^L, capped at full supply
-        if (bps >= 10_000) return totalSupply();
-        return (totalSupply() * bps) / 10_000;
+        if (bps >= 10_000) return supply;
+        return (supply * bps) / 10_000;
     }
 
     /// Vote with escrowed stake; re-voting moves the whole stake. Choice = outcome
@@ -203,7 +214,8 @@ contract Resolver is FakeableERC20 {
             r.totalVoted -= oldStake;
         }
         if (stake != 0) {
-            _update(msg.sender, address(this), stake); // caller-authorized escrow
+            // escrowed via allowance (approve the resolver once)
+            require(s.stakeToken.transferFrom(msg.sender, address(this), stake), "escrow failed");
             s.tally[rid][choice] += stake;
             r.totalVoted += stake;
         }
@@ -277,7 +289,7 @@ contract Resolver is FakeableERC20 {
         if (r.level >= s.levelMax) revert InvalidAppeal();
         if (differentOutcome == r.winner) revert InvalidAppeal();
         if (differentOutcome != DEFER && differentOutcome >= IEvent(r.event_).outcomeCount()) revert BadChoice();
-        _update(msg.sender, address(this), s.appealBond); // caller-authorized bond
+        require(s.stakeToken.transferFrom(msg.sender, address(this), s.appealBond), "bond failed");
         r.status = RoundStatus.Final; // superseded — no plain finalize possible
         uint8 level = r.level + 1;
         s.levelOf[r.event_] = level;
@@ -341,7 +353,7 @@ contract Resolver is FakeableERC20 {
 
         require(payout != 0, "nothing to claim");
         emit Claimed(rid, msg.sender, payout); // state zeroed above; CEI-safe
-        _update(address(this), msg.sender, payout); // contract pays out escrow
+        require(s.stakeToken.transfer(msg.sender, payout), "payout failed"); // contract pays out escrow
     }
 
     uint256[50] private __resolverGap;

@@ -1,0 +1,1 @@
+{"version":1,"failures":[{"contract":"test/Resolver.t.sol:ResolverTest","test":"test_appeal_overturn_rewards_appellant_and_new_winners"}]}
